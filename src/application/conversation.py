@@ -204,7 +204,4 @@ Generate ONLY the question, no explanation."""
         
         lines.append("\nDoes this look correct?")
         return "\n".join(lines)
-    """Manages the flow of a medical intake conversation."""
-    
-    def __init__(self):
 
