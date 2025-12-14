@@ -5,303 +5,206 @@ from typing import Optional, List
 
 from src.domain.models import SymptomIntake, Demographics
 from src.domain.rules import RED_FLAG_QUESTIONS, evaluate_red_flags
+from src.application.ports import LLMPort
 
 
 logger = logging.getLogger(__name__)
 
 
-class ConversationStage(Enum):
-    INITIAL = "initial"  # Waiting for chief complaint
-    CHIEF_COMPLAINT = "chief_complaint"  # Chief complaint received
-    ASKING_FOLLOWUPS = "asking_followups"  # Asking about duration, severity, etc.
-    RED_FLAG_CHECK = "red_flag_check"  # Asking red flag questions
-    DEMOGRAPHICS = "demographics"  # Age, pregnancy, etc.
-    SUMMARY = "summary"  # Confirming intake summary
-    ASSESSMENT = "assessment"  # Generating final assessment
-    RESULTS = "results"  # Showing results
-
-
-class ConversationManager:
-    """Manages the flow of a medical intake conversation."""
+class SmartConversationManager:
+    """Uses LLM to drive intelligent, adaptive medical intake conversations."""
     
-    def __init__(self):
-        self.stage = ConversationStage.INITIAL
+    def __init__(self, llm: LLMPort):
+        self.llm = llm
         self.intake = SymptomIntake()
-        self.asked_questions: List[str] = []
-        self.current_question_key: Optional[str] = None
-        self.red_flags_checked = False
+        self.conversation_history: List[dict] = []
+        self.stage = "initial"  # initial, intake, assessment
+        self.questions_asked = 0
+        self.max_questions = 15
         
-    def start_new_conversation(self):
-        """Reset conversation to initial state."""
-        self.stage = ConversationStage.INITIAL
+    def start_new(self):
         self.intake = SymptomIntake()
-        self.asked_questions = []
-        self.current_question_key = None
-        self.red_flags_checked = False
+        self.conversation_history = []
+        self.stage = "initial"
+        self.questions_asked = 0
     
-    def get_next_question(self) -> str:
-        """Determine and return the next question to ask based on stage and intake."""
+    def get_next_response(self, user_message: str) -> str:
+        """Get AI-generated response based on conversation context."""
         
-        if self.stage == ConversationStage.INITIAL:
-            return "What brings you in today? Please describe your main symptom or concern."
+        # Add user message to history
+        self.conversation_history.append({"role": "user", "content": user_message})
         
-        elif self.stage == ConversationStage.CHIEF_COMPLAINT:
-            # Ask about duration
-            if "duration" not in self.asked_questions:
-                self.current_question_key = "duration"
-                return "How long have you had this symptom? (e.g., 2 days, 1 week)"
-            
-            # Ask about severity
-            if "severity" not in self.asked_questions:
-                self.current_question_key = "severity"
-                return "On a scale of 0-10, how severe is this symptom? (0 = none, 10 = worst possible)"
-            
-            # Ask about onset
-            if "onset" not in self.asked_questions:
-                self.current_question_key = "onset"
-                return "Did this start suddenly or gradually?"
-            
-            # Ask about fever (if relevant)
-            if "fever" not in self.asked_questions:
-                self.current_question_key = "fever"
-                return "Do you have a fever?"
-            
-            # Ask about pain (if complaint mentions pain)
-            if self._is_pain_related() and "pain" not in self.asked_questions:
-                self.current_question_key = "pain"
-                return "On a scale of 0-10, how would you rate the pain?"
-            
-            # Ask about triggers
-            if "triggers" not in self.asked_questions:
-                self.current_question_key = "triggers"
-                return "Is there anything that makes it better or worse? (e.g., movement, position, food)"
-            
-            # Ask about history
-            if "history" not in self.asked_questions:
-                self.current_question_key = "history"
-                return "Do you have any relevant medical history? (e.g., diabetes, heart disease, asthma)"
-            
-            # Ask about meds
-            if "meds" not in self.asked_questions:
-                self.current_question_key = "meds"
-                return "Are you taking any medications?"
-            
-            # Ask about allergies
-            if "allergies" not in self.asked_questions:
-                self.current_question_key = "allergies"
-                return "Do you have any known allergies?"
-            
-            # Move to red flags
-            self.stage = ConversationStage.RED_FLAG_CHECK
-            return self.get_next_question()
-        
-        elif self.stage == ConversationStage.RED_FLAG_CHECK:
-            # Check red flags one by one
-            for key, question in RED_FLAG_QUESTIONS.items():
-                if key not in self.asked_questions:
-                    self.current_question_key = key
-                    return f"⚠️ Quick safety check: {question} (yes/no)"
-            
-            # Move to demographics
-            self.stage = ConversationStage.DEMOGRAPHICS
-            return self.get_next_question()
-        
-        elif self.stage == ConversationStage.DEMOGRAPHICS:
-            # Ask age
-            if "age" not in self.asked_questions:
-                self.current_question_key = "age"
-                return "How old are you?"
-            
-            # Ask about pregnancy if relevant
-            if "pregnancy" not in self.asked_questions:
-                self.current_question_key = "pregnancy"
-                return "Are you pregnant or could you be pregnant?"
-            
-            # Ask about elderly
-            if "elderly" not in self.asked_questions:
-                self.current_question_key = "elderly"
-                return "Are you 65 or older?"
-            
-            # Ask about immunocompromised
-            if "immunocompromised" not in self.asked_questions:
-                self.current_question_key = "immunocompromised"
-                return "Do you have any immune system conditions? (HIV, cancer treatment, organ transplant, etc.)"
-            
-            # Move to summary
-            self.stage = ConversationStage.SUMMARY
-            return self.get_next_question()
-        
-        elif self.stage == ConversationStage.SUMMARY:
-            # Generate summary for confirmation
-            summary = self._build_intake_summary()
-            return f"Let me confirm what I've gathered:\n\n{summary}\n\nDoes this sound correct?"
-        
-        elif self.stage == ConversationStage.ASSESSMENT:
-            return "Analyzing your symptoms..."
-        
-        return "Thank you for providing that information."
-    
-    def process_user_response(self, user_message: str) -> None:
-        """Process user's response and update intake based on current question."""
-        
-        if self.stage == ConversationStage.INITIAL:
+        # Determine what to do based on stage
+        if self.stage == "initial":
+            # First user message is chief complaint
             self.intake.chief_complaint = user_message
-            self.stage = ConversationStage.CHIEF_COMPLAINT
-            self.asked_questions.append("chief_complaint")
+            self.stage = "intake"
+            self.questions_asked = 1
+            # Generate contextual follow-up question
+            ai_response = self._generate_question()
         
-        elif self.stage == ConversationStage.CHIEF_COMPLAINT:
-            key = self.current_question_key
+        elif self.stage == "intake":
+            # Update intake based on latest response
+            self._update_intake_from_response(user_message)
             
-            if key == "duration":
-                self.intake.duration = user_message
-                self.asked_questions.append(key)
-            
-            elif key == "severity":
-                try:
-                    severity = int(''.join(c for c in user_message if c.isdigit()))
-                    self.intake.severity_scale = min(10, max(0, severity))
-                except:
-                    pass
-                self.asked_questions.append(key)
-            
-            elif key == "onset":
-                self.intake.onset = user_message
-                self.asked_questions.append(key)
-            
-            elif key == "fever":
-                self.intake.fever = user_message.lower() in {"yes", "y", "true"}
-                self.asked_questions.append(key)
-            
-            elif key == "pain":
-                try:
-                    pain = int(''.join(c for c in user_message if c.isdigit()))
-                    self.intake.pain_scale = min(10, max(0, pain))
-                except:
-                    pass
-                self.asked_questions.append(key)
-            
-            elif key == "triggers":
-                if user_message.lower() not in {"none", "no", "n/a"}:
-                    self.intake.triggers = [t.strip() for t in user_message.split(",")]
-                self.asked_questions.append(key)
-            
-            elif key == "history":
-                if user_message.lower() not in {"none", "no", "n/a"}:
-                    self.intake.relevant_history = [h.strip() for h in user_message.split(",")]
-                self.asked_questions.append(key)
-            
-            elif key == "meds":
-                if user_message.lower() not in {"none", "no", "n/a"}:
-                    self.intake.meds = [m.strip() for m in user_message.split(",")]
-                self.asked_questions.append(key)
-            
-            elif key == "allergies":
-                if user_message.lower() not in {"none", "no", "n/a"}:
-                    self.intake.allergies = [a.strip() for a in user_message.split(",")]
-                self.asked_questions.append(key)
-        
-        elif self.stage == ConversationStage.RED_FLAG_CHECK:
-            key = self.current_question_key
-            is_yes = user_message.lower() in {"yes", "y", "true"}
-            self.intake.red_flag_answers[key] = is_yes
-            self.asked_questions.append(key)
-        
-        elif self.stage == ConversationStage.DEMOGRAPHICS:
-            key = self.current_question_key
-            
-            if key == "age":
-                try:
-                    age = int(''.join(c for c in user_message if c.isdigit()))
-                    self.intake.demographics.age = age
-                except:
-                    pass
-                self.asked_questions.append(key)
-            
-            elif key == "pregnancy":
-                is_yes = user_message.lower() in {"yes", "y", "true"}
-                self.intake.demographics.is_pregnant = is_yes
-                self.asked_questions.append(key)
-            
-            elif key == "elderly":
-                is_yes = user_message.lower() in {"yes", "y", "true"}
-                self.intake.demographics.is_elderly = is_yes
-                self.asked_questions.append(key)
-            
-            elif key == "immunocompromised":
-                is_yes = user_message.lower() in {"yes", "y", "true"}
-                self.intake.demographics.is_immunocompromised = is_yes
-                self.asked_questions.append(key)
-        
-        elif self.stage == ConversationStage.SUMMARY:
-            if user_message.lower() in {"yes", "y", "correct", "correct."}:
-                self.stage = ConversationStage.ASSESSMENT
+            # Check if we have enough info
+            if self.questions_asked >= self.max_questions or self._intake_complete():
+                self.stage = "assessment"
+                ai_response = "Let me confirm what I've learned and then provide an assessment.\n\n" + self._build_summary()
             else:
-                # Reset to ask again
-                logger.info("User indicated summary was incorrect; resetting.")
-                self.stage = ConversationStage.CHIEF_COMPLAINT
-                self.asked_questions = ["chief_complaint"]
+                # Generate next contextual question
+                self.questions_asked += 1
+                ai_response = self._generate_question()
+        
+        else:  # assessment stage
+            ai_response = "Assessment complete. Please reset conversation to start again."
+        
+        # Add AI response to history
+        self.conversation_history.append({"role": "assistant", "content": ai_response})
+        
+        return ai_response
     
-    def _is_pain_related(self) -> bool:
-        """Check if chief complaint is pain-related."""
-        complaint = (self.intake.chief_complaint or "").lower()
-        pain_keywords = ["pain", "ache", "hurt", "sore", "cramp", "tender"]
-        return any(kw in complaint for kw in pain_keywords)
+    def _generate_question(self) -> str:
+        """Use LLM to generate the next contextual question."""
+        context = self._build_conversation_context()
+        
+        prompt = f"""You are a medical intake assistant. Based on the conversation so far, ask ONE focused follow-up question to better understand the patient's condition.
+
+CONVERSATION SO FAR:
+{context}
+
+CURRENT INTAKE DATA:
+- Chief Complaint: {self.intake.chief_complaint}
+- Duration: {self.intake.duration or 'Not asked'}
+- Severity: {self.intake.severity_scale or 'Not asked'}/10
+- Onset: {self.intake.onset or 'Not asked'}
+- Fever: {self.intake.fever or 'Not asked'}
+- Triggers: {', '.join(self.intake.triggers) if self.intake.triggers else 'Not asked'}
+- Medical History: {', '.join(self.intake.relevant_history) if self.intake.relevant_history else 'Not asked'}
+- Medications: {', '.join(self.intake.meds) if self.intake.meds else 'Not asked'}
+- Allergies: {', '.join(self.intake.allergies) if self.intake.allergies else 'Not asked'}
+
+GUIDELINES:
+1. Ask ONE clear, focused question
+2. Ask about missing important details (duration, severity, onset, triggers, history, meds, allergies)
+3. Be conversational and empathetic
+4. If patient seems confused, clarify your previous question
+5. Check for red flags early (chest pain, breathing difficulty, fainting, severe bleeding, stroke signs)
+6. Don't repeat questions already asked
+7. Keep it brief (1-2 sentences)
+
+Generate ONLY the question, no explanation."""
+        
+        messages = [
+            {"role": "system", "content": "You are a caring medical intake assistant asking clarifying questions to understand a patient's condition."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        try:
+            response = self.llm.generate_intake_assessment_json(messages)
+            return response.strip()
+        except Exception as e:
+            logger.error("Failed to generate question: %s", e)
+            # Fallback to simple questions
+            return self._get_fallback_question()
     
-    def _build_intake_summary(self) -> str:
-        """Build a summary of the collected intake information."""
-        lines = []
+    def _get_fallback_question(self) -> str:
+        """Fallback simple question when LLM fails."""
+        if not self.intake.duration:
+            return "How long have you had this symptom?"
+        if self.intake.severity_scale is None:
+            return "On a scale of 0-10, how severe is this?"
+        if not self.intake.onset:
+            return "Did this start suddenly or gradually?"
+        if self.intake.fever is None:
+            return "Do you have a fever?"
+        if not self.intake.triggers:
+            return "Is there anything that makes it better or worse?"
+        if not self.intake.relevant_history:
+            return "Any relevant medical history (diabetes, heart disease, asthma, etc.)?"
+        if not self.intake.meds:
+            return "Are you taking any medications?"
+        if not self.intake.allergies:
+            return "Do you have any allergies?"
+        if self.intake.demographics.age is None:
+            return "What is your age?"
+        return "Is there anything else important I should know?"
+    
+    def _update_intake_from_response(self, user_message: str) -> None:
+        """Try to extract and update intake data from user response."""
+        msg_lower = user_message.lower()
+        
+        # Try to detect if they mentioned duration
+        if any(word in msg_lower for word in ["day", "week", "month", "hour", "since"]):
+            if not self.intake.duration:
+                self.intake.duration = user_message
+        
+        # Try to detect severity/pain scale
+        if any(c.isdigit() for c in user_message):
+            numbers = [int(s) for s in user_message.split() if s.isdigit()]
+            if numbers and not self.intake.severity_scale and numbers[0] <= 10:
+                self.intake.severity_scale = numbers[0]
+            if numbers and self.intake.pain_scale is None and numbers[0] <= 10:
+                self.intake.pain_scale = numbers[0]
+        
+        # Detect yes/no answers
+        is_yes = msg_lower in {"yes", "y", "yep", "yeah", "true"}
+        is_no = msg_lower in {"no", "n", "nope", "false"}
+        
+        if is_yes or is_no:
+            # Try to match to most recent question
+            if "fever" in self.conversation_history[-2]["content"].lower() if len(self.conversation_history) > 1 else False:
+                self.intake.fever = is_yes
+            elif "allerg" in self.conversation_history[-2]["content"].lower() if len(self.conversation_history) > 1 else False:
+                if is_no and not self.intake.allergies:
+                    self.intake.allergies = []
+            elif "medic" in self.conversation_history[-2]["content"].lower() if len(self.conversation_history) > 1 else False:
+                if is_no and not self.intake.meds:
+                    self.intake.meds = []
+    
+    def _intake_complete(self) -> bool:
+        """Check if we have essential info for assessment."""
+        essential_filled = (
+            self.intake.chief_complaint and
+            self.intake.duration and
+            (self.intake.severity_scale is not None)
+        )
+        return essential_filled
+    
+    def _build_conversation_context(self) -> str:
+        """Build context from conversation history."""
+        context_lines = []
+        for msg in self.conversation_history[-6:]:  # Last 6 messages
+            role = "Patient" if msg["role"] == "user" else "Assistant"
+            context_lines.append(f"{role}: {msg['content']}")
+        return "\n".join(context_lines) if context_lines else "No conversation yet"
+    
+    def _build_summary(self) -> str:
+        """Build intake summary."""
+        lines = ["## Summary of Your Symptoms\n"]
         
         if self.intake.chief_complaint:
             lines.append(f"**Chief Complaint:** {self.intake.chief_complaint}")
-        
         if self.intake.duration:
             lines.append(f"**Duration:** {self.intake.duration}")
-        
         if self.intake.severity_scale is not None:
             lines.append(f"**Severity:** {self.intake.severity_scale}/10")
-        
         if self.intake.onset:
             lines.append(f"**Onset:** {self.intake.onset}")
-        
         if self.intake.fever is not None:
             lines.append(f"**Fever:** {'Yes' if self.intake.fever else 'No'}")
-        
-        if self.intake.pain_scale is not None:
-            lines.append(f"**Pain:** {self.intake.pain_scale}/10")
-        
         if self.intake.triggers:
             lines.append(f"**Triggers:** {', '.join(self.intake.triggers)}")
-        
         if self.intake.relevant_history:
             lines.append(f"**Medical History:** {', '.join(self.intake.relevant_history)}")
-        
         if self.intake.meds:
             lines.append(f"**Medications:** {', '.join(self.intake.meds)}")
-        
         if self.intake.allergies:
             lines.append(f"**Allergies:** {', '.join(self.intake.allergies)}")
         
-        # Demographics
-        demo_lines = []
-        if self.intake.demographics.age:
-            demo_lines.append(f"Age: {self.intake.demographics.age}")
-        if self.intake.demographics.is_pregnant:
-            demo_lines.append("Pregnant: Yes")
-        if self.intake.demographics.is_elderly:
-            demo_lines.append("Age ≥65: Yes")
-        if self.intake.demographics.is_immunocompromised:
-            demo_lines.append("Immunocompromised: Yes")
-        
-        if demo_lines:
-            lines.append(f"**Demographics:** {', '.join(demo_lines)}")
-        
-        # Red flags
-        red_flags_triggered = [k for k, v in self.intake.red_flag_answers.items() if v]
-        if red_flags_triggered:
-            lines.append(f"**Red Flags:** {', '.join(red_flags_triggered)}")
-        
+        lines.append("\nDoes this look correct?")
         return "\n".join(lines)
+    """Manages the flow of a medical intake conversation."""
     
-    def is_ready_for_assessment(self) -> bool:
-        """Check if enough information has been gathered for assessment."""
-        return self.stage == ConversationStage.ASSESSMENT
+    def __init__(self):
+

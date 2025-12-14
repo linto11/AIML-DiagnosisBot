@@ -8,7 +8,7 @@ from src.infrastructure.llm.mistral_client import MistralLLMAdapter
 from src.infrastructure.doctor_search.google_places import GooglePlacesDoctorSearchAdapter
 from src.infrastructure.doctor_search.mock_search import MockDoctorSearchAdapter
 from src.application.use_cases import IntakeAssessmentUseCase
-from src.application.conversation import ConversationManager
+from src.application.conversation import SmartConversationManager
 
 
 logger = logging.getLogger(__name__)
@@ -21,9 +21,9 @@ DISCLAIMER = (
 )
 
 
-def _init_session_state():
-    if "conversation" not in st.session_state:
-        st.session_state.conversation = ConversationManager()
+def _init_session_state(llm):
+    if "smart_conversation" not in st.session_state:
+        st.session_state.smart_conversation = SmartConversationManager(llm)
     if "chat_messages" not in st.session_state:
         st.session_state.chat_messages = []
     if "assessment_result" not in st.session_state:
@@ -46,7 +46,6 @@ def _render_sidebar(settings: Settings):
     
     st.sidebar.markdown("### Model")
     st.sidebar.caption(f"**Model:** {settings.mistral_model}")
-    st.sidebar.caption(f"**API:** Mistral")
     
     st.sidebar.markdown("### Doctor Search")
     location = st.sidebar.text_input("Your city/area", placeholder="e.g., Dubai Marina")
@@ -55,23 +54,129 @@ def _render_sidebar(settings: Settings):
     if settings.google_places_api_key:
         st.sidebar.success("✓ Google Places API configured")
     else:
-        st.sidebar.warning("⚠️ Google Places API not configured (using mock results)")
+        st.sidebar.warning("⚠️ Using mock doctor results")
     
     st.sidebar.divider()
     
-    if st.sidebar.button("🔄 Reset Conversation", use_container_width=True):
-        st.session_state.conversation.start_new_conversation()
+    if st.sidebar.button("🔄 New Conversation", use_container_width=True):
+        st.session_state.smart_conversation.start_new()
         st.session_state.chat_messages = []
         st.session_state.assessment_result = None
         st.rerun()
 
 
+def main():
+    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
+    
+    st.set_page_config(
+        page_title="Virtual Health Assistant",
+        page_icon="⚕️",
+        layout="centered",
+        initial_sidebar_state="expanded",
+    )
+    
+    # Custom CSS for ChatGPT-style layout
+    st.markdown("""
+    <style>
+    [data-testid="stChatMessageContainer"] {
+        max-width: 700px;
+        margin: 0 auto;
+    }
+    
+    .stChatMessage {
+        max-width: 700px;
+    }
+    
+    @media (max-width: 768px) {
+        [data-testid="stChatMessageContainer"] {
+            max-width: 100%;
+        }
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    settings = Settings()
+    if not _require_mistral_key(settings):
+        st.stop()
+    
+    llm = MistralLLMAdapter(settings=settings)
+    _init_session_state(llm)
+    _render_sidebar(settings)
+    
+    # Header - centered
+    st.markdown("# 🏥 Virtual Health Assistant", unsafe_allow_html=True)
+    st.info(DISCLAIMER)
+    
+    # Chat container with max-width
+    chat_container = st.container()
+    
+    with chat_container:
+        # Display chat history
+        for msg in st.session_state.chat_messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+    
+    # Input area
+    user_input = st.chat_input("Type your response...")
+    
+    if user_input:
+        conversation = st.session_state.smart_conversation
+        
+        # Add user message
+        st.session_state.chat_messages.append({
+            "role": "user",
+            "content": user_input,
+        })
+        
+        with st.chat_message("user"):
+            st.markdown(user_input)
+        
+        # Generate AI response
+        with st.spinner("⏳ Thinking..."):
+            ai_response = conversation.get_next_response(user_input)
+        
+        st.session_state.chat_messages.append({
+            "role": "assistant",
+            "content": ai_response,
+        })
+        
+        # Check if assessment stage
+        if conversation.stage == "assessment" and st.session_state.assessment_result is None:
+            with st.spinner("🔬 Analyzing your condition..."):
+                try:
+                    usecase = IntakeAssessmentUseCase(llm=llm)
+                    assessment = usecase.assess(conversation.intake)
+                    st.session_state.assessment_result = assessment
+                    
+                    assessment_msg = _format_assessment_for_chat(assessment)
+                    st.session_state.chat_messages.append({
+                        "role": "assistant",
+                        "content": assessment_msg,
+                    })
+                except Exception as e:
+                    logger.exception("Assessment failed: %s", e)
+                    st.session_state.chat_messages.append({
+                        "role": "assistant",
+                        "content": f"❌ **Error during analysis:** {str(e)}\n\nPlease try again.",
+                    })
+        
+        st.rerun()
+    
+    # Initial message if no conversation yet
+    if not st.session_state.chat_messages:
+        first_msg = "Hi! I'm your virtual health assistant. What brings you in today? Please describe your main symptom or concern."
+        st.session_state.chat_messages.append({
+            "role": "assistant",
+            "content": first_msg,
+        })
+        st.rerun()
+
+
 def _format_assessment_for_chat(assessment) -> str:
     """Format assessment as chat message."""
-    lines = [
-        "# 📋 Assessment Summary\n",
-        f"**Summary:** {assessment.summary}\n",
-    ]
+    lines = ["# 📋 Assessment Summary\n"]
+    
+    lines.append(f"**Summary:** {assessment.summary}\n")
     
     if assessment.urgency == "emergency":
         lines.append("## ⚠️ EMERGENCY")
@@ -117,72 +222,3 @@ def _format_assessment_for_chat(assessment) -> str:
     lines.append("⚠️ **Reminder:** This is NOT medical advice. Always consult a licensed healthcare professional.")
     
     return "\n".join(lines)
-
-
-def main():
-    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
-    
-    st.set_page_config(
-        page_title="Virtual Health Assistant",
-        page_icon="⚕️",
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
-    
-    settings = Settings()
-    if not _require_mistral_key(settings):
-        st.stop()
-    
-    _init_session_state()
-    _render_sidebar(settings)
-    
-    st.markdown("# 🏥 Virtual Health Assistant")
-    st.info(DISCLAIMER)
-    
-    llm = MistralLLMAdapter(settings=settings)
-    doctor_search = GooglePlacesDoctorSearchAdapter(settings=settings) if settings.google_places_api_key else MockDoctorSearchAdapter()
-    usecase = IntakeAssessmentUseCase(llm=llm, doctor_search=doctor_search)
-    
-    chat_container = st.container()
-    
-    with chat_container:
-        for msg in st.session_state.chat_messages:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-    
-    st.divider()
-    
-    conversation = st.session_state.conversation
-    
-    if conversation.is_ready_for_assessment() and st.session_state.assessment_result is None:
-        with st.spinner("🔬 Analyzing your symptoms with AI..."):
-            try:
-                assessment = usecase.assess(conversation.intake)
-                st.session_state.assessment_result = assessment
-                st.session_state.chat_messages.append({
-                    "role": "assistant",
-                    "content": _format_assessment_for_chat(assessment),
-                })
-            except Exception as e:
-                logger.exception("Assessment failed: %s", e)
-                st.session_state.chat_messages.append({
-                    "role": "assistant",
-                    "content": f"❌ **Error during analysis:** {str(e)}\n\nPlease try again.",
-                })
-    
-    user_input = st.chat_input("Type your response...")
-    
-    if user_input:
-        st.session_state.chat_messages.append({"role": "user", "content": user_input})
-        conversation.process_user_response(user_input)
-        
-        if not conversation.is_ready_for_assessment():
-            next_question = conversation.get_next_question()
-            st.session_state.chat_messages.append({"role": "assistant", "content": next_question})
-        
-        st.rerun()
-    
-    if not st.session_state.chat_messages:
-        first_question = conversation.get_next_question()
-        st.session_state.chat_messages.append({"role": "assistant", "content": first_question})
-        st.rerun()
