@@ -1,0 +1,16 @@
+[project]
+name = "virtual-health-assistant"
+version = "0.1.0"
+description = "Streamlit virtual health assistant using Clean Architecture and Mistral API"
+requires-python = ">=3.10"
+dependencies = [
+  "streamlit>=1.30",
+  "pydantic>=2.5",
+  "mistralai>=1.0.0",
+  "requests>=2.31",
+  "httpx>=0.24",
+]
+
+[tool.pytest.ini_options]
+python_files = "test_*.py"
+addopts = "-q"
