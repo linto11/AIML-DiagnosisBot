@@ -28,6 +28,8 @@ def _init_session_state(llm):
         st.session_state.chat_messages = []
     if "assessment_result" not in st.session_state:
         st.session_state.assessment_result = None
+    if "doctors" not in st.session_state:
+        st.session_state.doctors = []
 
 
 def _require_mistral_key(settings: Settings) -> bool:
@@ -62,6 +64,7 @@ def _render_sidebar(settings: Settings):
         st.session_state.smart_conversation.start_new()
         st.session_state.chat_messages = []
         st.session_state.assessment_result = None
+        st.session_state.doctors = []
         st.rerun()
 
 
@@ -75,9 +78,10 @@ def main():
         initial_sidebar_state="expanded",
     )
     
-    # Custom CSS for ChatGPT-style layout
+    # Custom CSS for ChatGPT-style layout with proper left/right alignment
     st.markdown("""
     <style>
+    /* Center chat container */
     [data-testid="stChatMessageContainer"] {
         max-width: 700px;
         margin: 0 auto;
@@ -87,6 +91,7 @@ def main():
         max-width: 700px;
     }
     
+    /* Mobile responsive */
     @media (max-width: 768px) {
         [data-testid="stChatMessageContainer"] {
             max-width: 100%;
@@ -140,7 +145,7 @@ def main():
             "content": ai_response,
         })
         
-        # Check if assessment stage and generate results
+        # Check if assessment stage
         if conversation.stage == "assessment" and st.session_state.assessment_result is None:
             with st.spinner("🔬 Analyzing your condition..."):
                 try:
@@ -148,11 +153,12 @@ def main():
                     assessment = usecase.assess(conversation.intake)
                     st.session_state.assessment_result = assessment
                     
-                    # Get location for doctor search
+                    # Search for nearby doctors
                     location = st.session_state.get("location_query", "")
                     doctors = []
                     if assessment.recommended_specialists and location:
                         doctors = _search_doctors(settings, assessment.recommended_specialists, location)
+                    st.session_state.doctors = doctors
                     
                     assessment_msg = _format_assessment_for_chat(assessment, doctors)
                     st.session_state.chat_messages.append({
@@ -179,8 +185,8 @@ def main():
 
 
 def _format_assessment_for_chat(assessment, doctors=None) -> str:
-    """Format assessment as chat message with doctor recommendations."""
-    lines = ["# 📋 Assessment Summary\n"]
+    """Format assessment as chat message with discussion points and doctors."""
+    lines = ["# 📋 Medical Assessment Report\n"]
     
     lines.append(f"**Summary:** {assessment.summary}\n")
     
@@ -224,23 +230,42 @@ def _format_assessment_for_chat(assessment, doctors=None) -> str:
         lines.append("No specific specialist recommended")
     lines.append("")
     
-    # Add doctor/clinic information if available
-    if doctors:
+    # ADD DISCUSSION POINTS FOR DOCTOR
+    lines.append("## 💬 Key Discussion Points for Your Doctor")
+    lines.append("When you visit your healthcare provider, consider discussing these points:")
+    lines.append("")
+    lines.append(f"- **Chief Complaint:** {assessment.summary}")
+    lines.append(f"- **Ask about:** The conditions mentioned above")
+    lines.append(f"- **Specialist to see:** {', '.join(assessment.recommended_specialists) if assessment.recommended_specialists else 'General Practitioner'}")
+    if assessment.red_flags:
+        lines.append(f"- **Important to mention:** The red flags detected in your symptoms")
+    lines.append("- **Request:** Any tests or imaging that may be needed")
+    lines.append("- **Ask about:** Treatment options and alternatives")
+    lines.append("- **Discuss:** Expected timeline for recovery")
+    lines.append("")
+    
+    # ADD NEARBY DOCTORS/CLINICS
+    if doctors and len(doctors) > 0:
         lines.append("## 🏥 Nearby Clinics & Hospitals\n")
-        for doctor in doctors:
-            lines.append(f"**{doctor.get('name', 'Clinic')}**")
+        for i, doctor in enumerate(doctors, 1):
+            lines.append(f"### {i}. {doctor.get('name', 'Clinic')}")
             if doctor.get('rating'):
-                lines.append(f"- ⭐ Rating: {doctor['rating']:.1f}/5")
+                lines.append(f"   ⭐ **Rating:** {doctor['rating']:.1f}/5")
             if doctor.get('address'):
-                lines.append(f"- 📍 Address: {doctor['address']}")
+                lines.append(f"   📍 **Address:** {doctor['address']}")
             if doctor.get('phone'):
-                lines.append(f"- 📞 Phone: {doctor['phone']}")
+                lines.append(f"   📞 **Phone:** `{doctor['phone']}`")
+            if doctor.get('type'):
+                lines.append(f"   🏢 **Type:** {doctor['type']}")
             if doctor.get('maps_url'):
-                lines.append(f"- [View on Maps]({doctor['maps_url']})")
+                lines.append(f"   🗺️ [View on Google Maps]({doctor['maps_url']})")
             lines.append("")
+    else:
+        lines.append("## 🏥 Doctor Search\n")
+        lines.append("To find nearby clinics and hospitals, please enter your city/area in the Settings sidebar.\n")
     
     lines.append("---")
-    lines.append("⚠️ **Reminder:** This is NOT medical advice. Always consult a licensed healthcare professional.")
+    lines.append("⚠️ **Reminder:** This is NOT a diagnosis. Always consult a licensed healthcare professional for proper evaluation and treatment.")
     
     return "\n".join(lines)
 
@@ -252,18 +277,24 @@ def _search_doctors(settings: Settings, specialists: list, location: str) -> lis
             adapter = GooglePlacesDoctorSearchAdapter(
                 api_key=settings.google_places_api_key
             )
+            # Search for specialists
+            query = specialists[0] if specialists else "clinic"
+            doctors = adapter.search_specialists(f"{query} clinic in {location}")
         else:
             adapter = MockDoctorSearchAdapter()
+            doctors = adapter.search_specialists(f"clinic in {location}")
         
-        # Search for the first specialist or general practitioners
-        query = specialists[0] if specialists else "clinic"
-        doctors = adapter.search_specialists(f"{query} near {location}")
-        return doctors
+        return doctors if doctors else []
     except Exception as e:
         logger.warning(f"Doctor search failed: {e}")
         # Return mock doctors as fallback
         try:
             mock_adapter = MockDoctorSearchAdapter()
-            return mock_adapter.search_specialists(f"clinic near {location}")
-        except:
+            return mock_adapter.search_specialists(f"clinic in {location}")
+        except Exception as e2:
+            logger.error(f"Mock doctor search also failed: {e2}")
             return []
+
+
+if __name__ == "__main__":
+    main()
