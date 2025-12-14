@@ -2,7 +2,14 @@
 showErrorDetails = true
 
 [logger]
-level = "info"
+level = "warning"
 
 [browser]
 serverAddress = "localhost"
+
+[theme]
+primaryColor = "#FF6B6B"
+backgroundColor = "#0E1117"
+secondaryBackgroundColor = "#262730"
+textColor = "#FAFAFA"
+font = "sans serif"
