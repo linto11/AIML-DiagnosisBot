@@ -139,6 +139,10 @@ def main():
         # Generate AI response
         with st.spinner("⏳ Thinking..."):
             ai_response = conversation.get_next_response(user_input)
+
+        # If user moved back to intake/confirmation, clear old assessment so we can rerun
+        if conversation.stage != "assessment":
+            st.session_state.assessment_result = None
         
         st.session_state.chat_messages.append({
             "role": "assistant",

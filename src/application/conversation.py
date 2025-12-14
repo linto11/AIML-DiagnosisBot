@@ -18,9 +18,10 @@ class SmartConversationManager:
         self.llm = llm
         self.intake = SymptomIntake()
         self.conversation_history: List[dict] = []
-        self.stage = "initial"  # initial, intake, assessment
+        self.stage = "initial"  # initial, intake, confirmation, assessment
         self.questions_asked = 0
-        self.max_questions = 15
+        self.max_questions = 10
+        self.min_questions_before_confirm = 4
         
     def start_new(self):
         self.intake = SymptomIntake()
@@ -47,36 +48,38 @@ class SmartConversationManager:
             # Update intake based on latest response
             self._update_intake_from_response(user_message)
             
-            # Check if we have enough comprehensive info
-            # Require at least 5-6 questions asked + essential data before moving to confirmation
-            if self.questions_asked >= 5 and self._intake_substantially_complete():
-                # Move to confirmation stage
+            # Decide whether to move to confirmation
+            if self._intake_substantially_complete() and self.questions_asked >= self.min_questions_before_confirm:
                 self.stage = "confirmation"
-                ai_response = self._build_confirmation_message()
+                ai_response = "Let me confirm what I've learned before assessing.\n\n" + self._build_summary()
             elif self.questions_asked >= self.max_questions:
-                # Force to confirmation if we've asked many questions
                 self.stage = "confirmation"
-                ai_response = self._build_confirmation_message()
+                ai_response = "Let me confirm what I've learned before assessing.\n\n" + self._build_summary()
             else:
                 # Generate next contextual question
                 self.questions_asked += 1
                 ai_response = self._generate_question()
         
-        else:  # confirmation or assessment stage
-            if self.stage == "confirmation":
-                # Check if user approved
-                msg_lower = user_message.lower()
-                if msg_lower in {"yes", "y", "correct", "that's correct", "yep", "ok", "okay"}:
-                    self.stage = "assessment"
-                    ai_response = "🔬 Thank you. Let me analyze your symptoms and provide a medical assessment..."
-                elif msg_lower in {"no", "n", "incorrect", "that's not correct", "nope"}:
-                    ai_response = "No problem. What would you like to change or add?"
-                    self.stage = "intake"  # Go back to intake for more questions
-                else:
-                    ai_response = "Got it. Is there anything else you'd like to add to your symptoms?"
-            else:  # assessment stage
-                ai_response = "Assessment complete. Type 'reset' to start a new conversation, or ask any follow-up questions."
+        elif self.stage == "confirmation":
+            msg_lower = user_message.strip().lower()
+            if msg_lower in {"yes", "y", "yep", "correct", "ok", "okay"}:
+                self.stage = "assessment"
+                ai_response = "Thank you. I'll analyze your symptoms now and share results shortly."
+            elif msg_lower in {"no", "n", "nope", "not correct", "incorrect"}:
+                self.stage = "intake"
+                ai_response = "No problem. Tell me what to change or any missing symptoms, and I'll adjust."
+            else:
+                ai_response = "Please reply 'yes' if the summary looks correct, or 'no' and tell me what to adjust."
         
+        else:  # assessment stage
+            msg_lower = user_message.lower()
+            # If user wants to add/change info after assessment, return to intake
+            if any(k in msg_lower for k in ["add", "change", "update", "location", "city", "area", "clinic", "hospital", "doctor", "reassess", "more"]):
+                self.stage = "intake"
+                self.questions_asked = max(0, self.questions_asked - 1)
+                ai_response = "No problem — let's update your info. Tell me what to add or correct."
+            else:
+                ai_response = "I can still help. Ask follow-up questions or tell me if you want to update any details."
         
         # Add AI response to history
         self.conversation_history.append({"role": "assistant", "content": ai_response})
@@ -189,24 +192,19 @@ Generate ONLY the question, no explanation."""
             (self.intake.severity_scale is not None)
         )
         return essential_filled
-    
+
     def _intake_substantially_complete(self) -> bool:
-        """Check if we have substantial info for a good assessment."""
-        # Require chief complaint, duration, severity, and at least one more data point
-        additional_info = (
-            self.intake.onset or
-            self.intake.fever is not None or
-            self.intake.triggers or
-            self.intake.relevant_history or
-            self.intake.meds or
-            self.intake.allergies
-        )
-        return (
-            self.intake.chief_complaint and
-            self.intake.duration and
-            (self.intake.severity_scale is not None) and
-            additional_info
-        )
+        """Check if we have enough breadth to move to confirmation."""
+        additional_info = any([
+            self.intake.onset,
+            self.intake.fever is not None,
+            bool(self.intake.triggers),
+            bool(self.intake.relevant_history),
+            bool(self.intake.meds),
+            bool(self.intake.allergies),
+            self.intake.demographics.age is not None,
+        ])
+        return self._intake_complete() and additional_info
     
     def _build_conversation_context(self) -> str:
         """Build context from conversation history."""
@@ -240,33 +238,5 @@ Generate ONLY the question, no explanation."""
             lines.append(f"**Allergies:** {', '.join(self.intake.allergies)}")
         
         lines.append("\nDoes this look correct?")
-        return "\n".join(lines)
-    
-    def _build_confirmation_message(self) -> str:
-        """Build confirmation message before assessment."""
-        lines = ["## Summary of Your Symptoms\n"]
-        
-        if self.intake.chief_complaint:
-            lines.append(f"**Chief Complaint:** {self.intake.chief_complaint}")
-        if self.intake.duration:
-            lines.append(f"**Duration:** {self.intake.duration}")
-        if self.intake.severity_scale is not None:
-            lines.append(f"**Severity:** {self.intake.severity_scale}/10")
-        if self.intake.onset:
-            lines.append(f"**Onset:** {self.intake.onset}")
-        if self.intake.fever is not None:
-            lines.append(f"**Fever:** {'Yes' if self.intake.fever else 'No'}")
-        if self.intake.triggers:
-            lines.append(f"**Triggers:** {', '.join(self.intake.triggers)}")
-        if self.intake.relevant_history:
-            lines.append(f"**Medical History:** {', '.join(self.intake.relevant_history)}")
-        if self.intake.meds:
-            lines.append(f"**Medications:** {', '.join(self.intake.meds)}")
-        if self.intake.allergies:
-            lines.append(f"**Allergies:** {', '.join(self.intake.allergies)}")
-        
-        lines.append("\n---")
-        lines.append("✅ **Is this information correct and complete?** (Reply 'yes' to proceed, or tell me what to change)")
-        
         return "\n".join(lines)
 
