@@ -90,6 +90,19 @@ def main():
     .stChatMessage {
         max-width: 700px;
     }
+
+    /* User messages on the right: flip row, align bubble and avatar */
+    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatar"] img[alt="user"]) {
+        flex-direction: row-reverse;
+        justify-content: flex-end;
+    }
+    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatar"] img[alt="user"]) [data-testid="stMarkdownContainer"] {
+        text-align: right;
+    }
+    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatar"] img[alt="user"]) [data-testid="stChatMessageAvatar"] {
+        margin-left: 10px;
+        margin-right: 0;
+    }
     
     /* Mobile responsive */
     @media (max-width: 768px) {
