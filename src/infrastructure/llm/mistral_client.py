@@ -32,7 +32,8 @@ class MistralLLMAdapter(LLMPort):
         if not self._client:
             raise RuntimeError("Mistral client not initialized (missing API key or import error)")
         try:
-            response = self._client.chat(
+            # chat is a property that returns a ChatMessage object with a complete method
+            response = self._client.chat.complete(
                 model=self._model,
                 messages=messages,
             )

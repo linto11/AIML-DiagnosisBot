@@ -118,53 +118,117 @@ def _ask_intake_questions(intake: SymptomIntake):
 
 
 def _render_assessment(assessment, doctor_results):
-    st.subheader("Summary")
-    st.write(assessment.summary)
-
-    st.subheader("Red Flags Check")
+    st.subheader("📋 Assessment Results")
+    
+    # Summary card
+    st.markdown("### Summary")
+    st.info(assessment.summary)
+    
+    # Urgency badge (prominent)
+    col_urgency = st.columns([1, 3])
+    with col_urgency[0]:
+        if assessment.urgency == "emergency":
+            st.markdown("### ⚠️ EMERGENCY")
+            st.error("Seek immediate medical care (call local emergency number)")
+        elif assessment.urgency == "see a doctor soon":
+            st.markdown("### ⏰ SOON")
+            st.warning("Schedule a doctor appointment soon for professional evaluation")
+        else:
+            st.markdown("### ✅ SELF-CARE")
+            st.success("Monitor symptoms; home care is likely appropriate")
+    
+    st.divider()
+    
+    # Red flags section
+    st.markdown("### 🚨 Red Flags Check")
     if assessment.red_flags:
-        st.warning("Potential red flags: " + ", ".join(assessment.red_flags))
+        for flag in assessment.red_flags:
+            st.error(f"⚠️ {flag.replace('_', ' ').title()}")
     else:
-        st.success("No red flags reported.")
-
-    st.subheader("Possible Conditions")
-    for c in assessment.possible_conditions:
-        st.write(f"- {c.name} (confidence: {c.confidence:.2f})")
-        st.caption(f"Reasoning: {c.reasoning}")
-        if c.uncertainty_notes:
-            st.caption(f"Uncertainty: {c.uncertainty_notes}")
-
-    st.subheader("Urgency Guidance")
-    if assessment.urgency == "emergency":
-        st.error("Emergency: seek immediate care (call local emergency number).")
-    elif assessment.urgency == "see a doctor soon":
-        st.warning("See a healthcare professional soon for evaluation.")
+        st.success("✓ No red flags detected")
+    
+    st.divider()
+    
+    # Possible conditions - Card layout
+    st.markdown("### 🏥 Possible Conditions")
+    if assessment.possible_conditions:
+        cols = st.columns(min(len(assessment.possible_conditions), 2))
+        for idx, condition in enumerate(assessment.possible_conditions):
+            col_idx = idx % 2
+            with cols[col_idx]:
+                # Color based on confidence
+                if condition.confidence >= 0.7:
+                    color = "🟢"
+                elif condition.confidence >= 0.5:
+                    color = "🟡"
+                else:
+                    color = "🔵"
+                
+                with st.container(border=True):
+                    st.markdown(f"#### {color} {condition.name}")
+                    st.metric("Confidence", f"{condition.confidence * 100:.0f}%")
+                    st.write(f"**Reasoning:** {condition.reasoning}")
+                    if condition.uncertainty_notes:
+                        st.caption(f"⚠️ *Uncertainty: {condition.uncertainty_notes}*")
     else:
-        st.info("Likely self-care is reasonable; monitor symptoms.")
-
-    st.subheader("Recommended Next Steps")
-    for step in assessment.next_steps:
-        st.write(f"- {step}")
-
-    st.subheader("Recommended Specialist(s)")
+        st.info("No conditions identified")
+    
+    st.divider()
+    
+    # Recommended next steps
+    st.markdown("### 📝 Recommended Next Steps")
+    if assessment.next_steps:
+        for i, step in enumerate(assessment.next_steps, 1):
+            st.write(f"{i}. {step}")
+    else:
+        st.write("No specific steps recommended")
+    
+    st.divider()
+    
+    # Specialists
+    st.markdown("### 👨‍⚕️ Recommended Specialist(s)")
     if assessment.recommended_specialists:
-        st.write(", ".join(assessment.recommended_specialists))
+        spec_cols = st.columns(len(assessment.recommended_specialists))
+        for idx, spec in enumerate(assessment.recommended_specialists):
+            with spec_cols[idx]:
+                st.info(f"🏨 {spec}")
     else:
-        st.write("None specified.")
-
-    st.subheader("Local Doctors")
+        st.write("No specialist recommended")
+    
+    st.divider()
+    
+    # Local doctors grid
+    st.markdown("### 🗺️ Local Doctors & Specialists")
     if doctor_results:
-        for d in doctor_results:
-            st.write(f"**{d.name}** — {d.specialty or ''}")
-            st.caption(f"Rating: {d.rating or 'N/A'}")
-            if d.address:
-                st.write(d.address)
-            if d.phone:
-                st.write(d.phone)
-            if d.maps_url:
-                st.link_button("Open in Maps", d.maps_url)
+        cols = st.columns(min(len(doctor_results), 2))
+        for idx, doctor in enumerate(doctor_results):
+            col_idx = idx % 2
+            with cols[col_idx]:
+                with st.container(border=True):
+                    st.markdown(f"#### {doctor.name}")
+                    if doctor.specialty:
+                        st.caption(f"**{doctor.specialty}**")
+                    
+                    metrics_col1, metrics_col2 = st.columns(2)
+                    with metrics_col1:
+                        if doctor.rating:
+                            st.metric("Rating", f"⭐ {doctor.rating:.1f}")
+                    with metrics_col2:
+                        st.metric("Status", "✓ Available")
+                    
+                    if doctor.address:
+                        st.write(f"📍 {doctor.address}")
+                    
+                    if doctor.phone:
+                        st.write(f"📞 {doctor.phone}")
+                    
+                    if doctor.maps_url:
+                        st.link_button("🗺️ Open in Maps", doctor.maps_url, use_container_width=True)
     else:
-        st.caption("No local listings found or search disabled.")
+        st.info("💡 No local listings found. Enter your city/area in the sidebar to search.")
+    
+    st.divider()
+    st.caption("⚕️ **Disclaimer:** This assessment is NOT medical advice. Always consult a licensed healthcare professional.")
 
 
 def main():
@@ -177,57 +241,85 @@ def main():
 
     _ensure_session_state()
     _sidebar(settings)
+    
+    st.title("Virtual Health Assistant")
     _render_disclaimer()
 
     llm, doctor_search = _init_adapters(settings)
     usecase = IntakeAssessmentUseCase(llm=llm, doctor_search=doctor_search)
 
-    st.title("Virtual Health Assistant (Safe & Structured)")
-
-    _render_chat_history()
-
-    prompt = st.chat_input("Describe your chief complaint (e.g., sore throat, headache)")
-    intake: SymptomIntake = st.session_state["intake"]
-    if prompt:
-        intake.chief_complaint = prompt
-        st.session_state["messages"].append({"role": "user", "content": prompt})
-
-    _ask_intake_questions(intake)
-
-    location = st.session_state.get("location_query") or ""
-    if st.button("Analyze Symptoms"):
-        try:
-            assessment = usecase.assess(intake)
-
-            st.session_state["assessment"] = assessment
+    # Main layout: tabs for chat vs form
+    tab1, tab2, tab3 = st.tabs(["Chat", "Intake Form", "Results"])
+    
+    with tab1:
+        st.subheader("Symptom Chat")
+        
+        # Display all previous messages
+        for msg in st.session_state["messages"]:
+            with st.chat_message(msg["role"]):
+                st.write(msg["content"])
+        
+        # Chat input
+        prompt = st.chat_input("Describe your chief complaint (e.g., sore throat, headache)")
+        if prompt:
+            intake: SymptomIntake = st.session_state["intake"]
+            intake.chief_complaint = prompt
+            # Add user message
+            st.session_state["messages"].append({"role": "user", "content": prompt})
+            # Display it immediately
+            with st.chat_message("user"):
+                st.write(prompt)
+            # Add a helper response
             st.session_state["messages"].append({
-                "role": "assistant",
-                "content": "Analysis complete. See assessment sections below.",
+                "role": "assistant", 
+                "content": f"Got it: {prompt}. Now fill in the details in the 'Intake Form' tab and click 'Analyze Symptoms'."
             })
+            with st.chat_message("assistant"):
+                st.write(f"Got it: {prompt}. Now fill in the details in the 'Intake Form' tab and click 'Analyze Symptoms'.")
 
-            # Doctor search if configured
-            doctor_results = []
-            if assessment.recommended_specialists:
-                if isinstance(doctor_search, MockDoctorSearchAdapter) and not settings.google_places_api_key:
-                    st.info("Local doctor search running in mock mode. Add GOOGLE_PLACES_API_KEY to enable real results.")
-                if location:
-                    for spec in assessment.recommended_specialists:
-                        doctor_results.extend(doctor_search.search_specialists(spec, location, limit=5))
+    with tab2:
+        st.subheader("Symptom Details")
+        st.info("Fill in additional details about your symptoms.")
+        intake: SymptomIntake = st.session_state["intake"]
+        _ask_intake_questions(intake)
+        
+        location = st.session_state.get("location_query") or ""
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔍 Analyze Symptoms", use_container_width=True):
+                if not intake.chief_complaint:
+                    st.error("Please enter a chief complaint in the Chat tab first.")
                 else:
-                    st.caption("Provide a city/area in the sidebar to search local doctors.")
+                    try:
+                        with st.spinner("Analyzing symptoms with Mistral..."):
+                            assessment = usecase.assess(intake)
+                            st.session_state["assessment"] = assessment
+                            st.session_state["messages"].append({
+                                "role": "assistant",
+                                "content": "Analysis complete. Check the Results tab.",
+                            })
+                            st.success("Analysis complete!")
+                    except Exception as e:
+                        logger.exception("Assessment failed: %s", e)
+                        st.error(f"Assessment failed: {str(e)}")
+        with col2:
+            if st.button("🔄 Reset", use_container_width=True):
+                st.session_state.clear()
+                _ensure_session_state()
+                st.rerun()
 
+    with tab3:
+        st.subheader("Assessment Results")
+        assessment = st.session_state.get("assessment")
+        if not assessment:
+            st.info("Complete the intake form and click 'Analyze Symptoms' to see results.")
+        else:
+            location = st.session_state.get("location_query") or ""
+            doctor_results = []
+            if assessment.recommended_specialists and location:
+                for spec in assessment.recommended_specialists:
+                    doctor_results.extend(doctor_search.search_specialists(spec, location, limit=5))
+            elif assessment.recommended_specialists and not location:
+                st.caption("Provide a city/area in the sidebar to search local doctors.")
+            
             _render_assessment(assessment, doctor_results)
-
-        except Exception as e:
-            logger.exception("Assessment failed: %s", e)
-            st.error("Something went wrong during assessment. Please try again.")
-
-    # Show last assessment if present
-    assessment = st.session_state.get("assessment")
-    if assessment:
-        # Recompute doctor results view on reload
-        doctor_results = []
-        if assessment.recommended_specialists and st.session_state.get("location_query"):
-            for spec in assessment.recommended_specialists:
-                doctor_results.extend(doctor_search.search_specialists(spec, st.session_state["location_query"], limit=5))
-        _render_assessment(assessment, doctor_results)

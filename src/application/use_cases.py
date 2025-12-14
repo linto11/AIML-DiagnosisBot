@@ -43,12 +43,13 @@ def build_user_prompt(intake: SymptomIntake) -> str:
 
 def build_schema_instructions() -> str:
     return (
-        "Return ONLY valid JSON with keys: "
-        "summary (string), red_flags (array of strings), possible_conditions (array of objects), "
+        "You MUST return ONLY a valid JSON object. Do NOT include any markdown, code fences, or explanations. "
+        "JSON keys: summary (string), red_flags (array of strings), possible_conditions (array of objects), "
         "urgency (one of 'self-care', 'see a doctor soon', 'emergency'), next_steps (array of strings), "
         "recommended_specialists (array of strings).\n"
         "Each possible condition object MUST have: name (string), confidence (float 0-1), "
-        "uncertainty_notes (string, optional), reasoning (string)."
+        "uncertainty_notes (string, optional), reasoning (string).\n"
+        "Start your response with { and end with }. Return valid JSON only."
     )
 
 
@@ -66,17 +67,42 @@ class IntakeAssessmentUseCase:
             {"role": "user", "content": build_user_prompt(intake)},
         ]
         raw = self.llm.generate_intake_assessment_json(messages)
+        raw = raw.strip()
 
         try:
+            # Try to extract JSON from response if it's wrapped
+            if not raw.startswith('{'):
+                # Look for JSON in the response
+                start_idx = raw.find('{')
+                if start_idx != -1:
+                    raw = raw[start_idx:]
+            if not raw.endswith('}'):
+                end_idx = raw.rfind('}')
+                if end_idx != -1:
+                    raw = raw[:end_idx+1]
+            
             data = json.loads(raw)
             assessment = AssessmentResponse(**data)
         except (json.JSONDecodeError, ValidationError) as e:
-            logger.warning("Assessment JSON invalid: %s. Attempting repair.", e)
-            # Single repair attempt
+            logger.warning("Assessment JSON invalid: %s. Attempting repair. Raw: %s", e, raw[:200])
+            # Single repair attempt with stronger instruction
             repair_messages = messages + [
-                {"role": "user", "content": "Repair: Return valid JSON only. No extra text."}
+                {"role": "assistant", "content": raw},
+                {"role": "user", "content": "The JSON was invalid. Return ONLY valid JSON wrapped in {}. Start with { and end with }. No other text."}
             ]
             raw = self.llm.generate_intake_assessment_json(repair_messages)
+            raw = raw.strip()
+            
+            # Extract JSON again
+            if not raw.startswith('{'):
+                start_idx = raw.find('{')
+                if start_idx != -1:
+                    raw = raw[start_idx:]
+            if not raw.endswith('}'):
+                end_idx = raw.rfind('}')
+                if end_idx != -1:
+                    raw = raw[:end_idx+1]
+            
             data = json.loads(raw)
             assessment = AssessmentResponse(**data)
 
