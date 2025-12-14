@@ -92,14 +92,14 @@ def main():
     }
 
     /* User messages on the right: flip row, align bubble and avatar */
-    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatar"] img[alt="user"]) {
+    [data-testid="stChatMessage-user"] {
         flex-direction: row-reverse;
         justify-content: flex-end;
     }
-    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatar"] img[alt="user"]) [data-testid="stMarkdownContainer"] {
+    [data-testid="stChatMessage-user"] [data-testid="stMarkdownContainer"] {
         text-align: right;
     }
-    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatar"] img[alt="user"]) [data-testid="stChatMessageAvatar"] {
+    [data-testid="stChatMessageAvatar-user"] {
         margin-left: 10px;
         margin-right: 0;
     }
