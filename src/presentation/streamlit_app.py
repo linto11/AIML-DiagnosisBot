@@ -9,6 +9,7 @@ from src.infrastructure.doctor_search.google_places import GooglePlacesDoctorSea
 from src.infrastructure.doctor_search.mock_search import MockDoctorSearchAdapter
 from src.application.use_cases import IntakeAssessmentUseCase
 from src.application.conversation import SmartConversationManager
+from src.presentation.auth_screens import show_auth_screen, logout
 
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,15 @@ def _require_mistral_key(settings: Settings) -> bool:
 
 def _render_sidebar(settings: Settings):
     st.sidebar.title("⚙️ Settings")
+    
+    # Show logged in user
+    if st.session_state.get("authenticated", False):
+        user_data = st.session_state.get("user_data", {})
+        st.sidebar.markdown(f"### 👤 {user_data.get('firstname', 'User')}")
+        st.sidebar.caption(f"📧 {user_data.get('email', '')}")
+        if st.sidebar.button("🚪 Logout", use_container_width=True):
+            logout()
+        st.sidebar.divider()
     
     st.sidebar.markdown("### Model")
     st.sidebar.caption(f"**Model:** {settings.mistral_model}")
@@ -112,6 +122,10 @@ def main():
     }
     </style>
     """, unsafe_allow_html=True)
+    
+    # Check authentication first
+    if not show_auth_screen():
+        st.stop()
     
     settings = Settings()
     if not _require_mistral_key(settings):
