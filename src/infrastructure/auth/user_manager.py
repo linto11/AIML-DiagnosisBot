@@ -21,11 +21,9 @@ class UserManager:
         """
         if storage_path is None:
             # Store in .streamlit directory (which is in .gitignore)
-            storage_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
-                ".streamlit",
-                "users.json"
-            )
+            # Navigate from this file to project root, then to .streamlit/users.json
+            project_root = Path(__file__).parent.parent.parent.parent
+            storage_path = str(project_root / ".streamlit" / "users.json")
         
         self.storage_path = storage_path
         self._ensure_storage_exists()
