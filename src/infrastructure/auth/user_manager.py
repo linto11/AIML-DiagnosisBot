@@ -1,8 +1,9 @@
 """User management with secure password hashing and storage."""
 import json
 import os
+import time
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from datetime import datetime
 import bcrypt
 
@@ -108,7 +109,7 @@ class UserManager:
         lastname: str,
         email: str,
         password: str
-    ) -> tuple[bool, str]:
+    ) -> Tuple[bool, str]:
         """
         Register a new user.
         
@@ -150,7 +151,7 @@ class UserManager:
         except Exception as e:
             return False, f"Failed to save user: {str(e)}"
     
-    def authenticate_user(self, email: str, password: str) -> tuple[bool, Optional[Dict[str, Any]]]:
+    def authenticate_user(self, email: str, password: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """
         Authenticate user with email and password.
         

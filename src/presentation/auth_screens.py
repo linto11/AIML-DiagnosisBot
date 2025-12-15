@@ -1,4 +1,5 @@
 """Authentication screens for login and registration."""
+import time
 import streamlit as st
 from src.infrastructure.auth.validators import (
     validate_email,
@@ -142,7 +143,6 @@ def show_register_screen() -> bool:
                 st.info("Redirecting to login page in 2 seconds...")
                 # Switch to login mode
                 st.session_state.auth_mode = "login"
-                import time
                 time.sleep(2)
                 st.rerun()
                 return True
